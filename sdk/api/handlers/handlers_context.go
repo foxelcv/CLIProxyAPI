@@ -12,6 +12,8 @@ import (
 
 type pinnedAuthContextKey struct{}
 
+type excludedAuthIDsContextKey struct{}
+
 type selectedAuthCallbackContextKey struct{}
 
 type finalizedResponseFormatCallbackContextKey struct{}
@@ -97,6 +99,33 @@ func allowDisabledPinnedAuthFromContext(ctx context.Context) bool {
 	}
 	allowed, _ := ctx.Value(allowDisabledPinnedAuthContextKey{}).(bool)
 	return allowed
+}
+
+// WithExcludedAuthIDs returns a child context that excludes specific auth IDs from selection.
+func WithExcludedAuthIDs(ctx context.Context, authIDs []string) context.Context {
+	if len(authIDs) == 0 {
+		return ctx
+	}
+	filtered := make([]string, 0, len(authIDs))
+	seen := make(map[string]struct{}, len(authIDs))
+	for _, authID := range authIDs {
+		trimmed := strings.TrimSpace(authID)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		filtered = append(filtered, trimmed)
+	}
+	if len(filtered) == 0 {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, excludedAuthIDsContextKey{}, filtered)
 }
 
 // WithSelectedAuthIDCallback returns a child context that receives the selected auth ID.
@@ -233,6 +262,18 @@ func pinnedAuthIDFromContext(ctx context.Context) string {
 	default:
 		return ""
 	}
+}
+
+func excludedAuthIDsFromContext(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	raw := ctx.Value(excludedAuthIDsContextKey{})
+	ids, ok := raw.([]string)
+	if !ok || len(ids) == 0 {
+		return nil
+	}
+	return append([]string(nil), ids...)
 }
 
 func selectedAuthIDCallbackFromContext(ctx context.Context) func(string) {

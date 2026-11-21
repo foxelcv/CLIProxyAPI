@@ -3,6 +3,7 @@ package auth
 import (
 	"container/heap"
 	"context"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,24 @@ type authAutoRefreshLoop struct {
 type refreshDispatch struct {
 	at    time.Time
 	epoch uint64
+	// grant fingerprints the refresh grant that was dispatched, so a replacement
+	// grant (re-login / manual token swap) bypasses the spin guard immediately.
+	grant uint64
+}
+
+// refreshGrantFingerprint hashes the credential's refresh grant without keeping
+// the token itself. Callers must hold manager.mu.
+func refreshGrantFingerprint(auth *Auth) uint64 {
+	if auth == nil || auth.Metadata == nil {
+		return 0
+	}
+	token, _ := auth.Metadata["refresh_token"].(string)
+	if token == "" {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(token))
+	return h.Sum64()
 }
 
 type authRefreshJob struct {
@@ -297,6 +316,7 @@ func (l *authAutoRefreshLoop) handleDueAuth(ctx context.Context, now time.Time, 
 	shouldRefresh := manager.shouldRefresh(auth, now)
 	exec, _ := manager.executorLocked(executorKeyFromAuth(auth))
 	registrationEpoch := auth.RegistrationEpoch
+	grant := refreshGrantFingerprint(auth)
 	manager.mu.RUnlock()
 
 	if !shouldSchedule {
@@ -310,7 +330,11 @@ func (l *authAutoRefreshLoop) handleDueAuth(ctx context.Context, now time.Time, 
 		// probe that is overdue while a runtime evaluator vetoes it). Never
 		// requeue at "now", or the scheduler spins and floods the logs.
 		if !next.After(now) {
-			next = now.Add(l.interval)
+			delay := l.interval
+			if delay <= 0 {
+				delay = refreshCheckInterval
+			}
+			next = now.Add(delay)
 		}
 		l.upsert(authID, next)
 		return
@@ -322,8 +346,9 @@ func (l *authAutoRefreshLoop) handleDueAuth(ctx context.Context, now time.Time, 
 	}
 
 	// Last-resort spin guard: never dispatch the same credential more than once
-	// per interval, whatever path put it back at "now".
-	if last, ok := l.lastDispatch[authID]; ok && last.epoch == registrationEpoch {
+	// per interval, whatever path put it back at "now". A replacement refresh
+	// grant is a new credential state and is allowed through immediately.
+	if last, ok := l.lastDispatch[authID]; ok && last.epoch == registrationEpoch && last.grant == grant {
 		if since := now.Sub(last.at); since >= 0 && since < l.interval {
 			if now.Sub(l.lastSpinWarn) >= time.Minute {
 				l.lastSpinWarn = now
@@ -355,7 +380,7 @@ func (l *authAutoRefreshLoop) handleDueAuth(ctx context.Context, now time.Time, 
 		select {
 		case <-ctx.Done():
 		case l.jobs <- job:
-			l.lastDispatch[authID] = refreshDispatch{at: now, epoch: registrationEpoch}
+			l.lastDispatch[authID] = refreshDispatch{at: now, epoch: registrationEpoch, grant: grant}
 			return
 		default:
 		}
