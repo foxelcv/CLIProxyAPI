@@ -4,8 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestV8AccessAPIKeyCredentialGroupsRoundTrip(t *testing.T) {
@@ -27,7 +28,16 @@ func TestV8AccessAPIKeyCredentialGroupsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
-	if strings.Contains(string(raw), "\napi-key-credential-groups:") || !strings.Contains(string(raw), "    api-key-credential-groups:") {
+	// The v8 writer re-indents the document, so assert on structure rather than indentation.
+	var saved map[string]any
+	if err = yaml.Unmarshal(raw, &saved); err != nil {
+		t.Fatalf("saved config is not valid YAML: %v\n%s", err, raw)
+	}
+	if _, legacy := saved["api-key-credential-groups"]; legacy {
+		t.Fatalf("groups saved at legacy top level:\n%s", raw)
+	}
+	access, _ := saved["access"].(map[string]any)
+	if _, ok := access["api-key-credential-groups"]; !ok {
 		t.Fatalf("groups not saved under access:\n%s", raw)
 	}
 	again, err := LoadConfig(path)

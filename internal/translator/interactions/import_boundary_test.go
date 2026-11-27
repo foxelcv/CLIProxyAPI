@@ -32,7 +32,7 @@ func TestInteractionsTranslatorsDoNotImportGeminiTranslators(t *testing.T) {
 			if errRead != nil {
 				return errRead
 			}
-			if forbidden.Match(data) {
+			if hasForbiddenGeminiImport(forbidden, data, scanDir) {
 				rel, errRel := filepath.Rel(repoRoot, path)
 				if errRel != nil {
 					rel = path
@@ -48,4 +48,25 @@ func TestInteractionsTranslatorsDoNotImportGeminiTranslators(t *testing.T) {
 	if len(violations) > 0 {
 		t.Fatalf("non-Gemini Interactions translators import Gemini translators: %s", strings.Join(violations, ", "))
 	}
+}
+
+// sameProviderGeminiHelpers lists provider helper packages an Interactions
+// translator may import even though their path ends in /gemini. Upstream
+// (ed885bdc) reuses Antigravity's own request sanitizers from
+// translator/antigravity/gemini inside the Antigravity Interactions translator;
+// that shares provider wire-format helpers and does not route Interactions
+// requests through a Gemini translator.
+var sameProviderGeminiHelpers = map[string]string{
+	"internal/translator/antigravity/interactions": `"github.com/router-for-me/CLIProxyAPI/v8/internal/translator/antigravity/gemini"`,
+}
+
+func hasForbiddenGeminiImport(forbidden *regexp.Regexp, data []byte, scanDir string) bool {
+	allowed := sameProviderGeminiHelpers[scanDir]
+	for _, match := range forbidden.FindAll(data, -1) {
+		if allowed != "" && string(match) == allowed {
+			continue
+		}
+		return true
+	}
+	return false
 }
