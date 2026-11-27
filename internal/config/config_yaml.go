@@ -92,6 +92,9 @@ func renderConfigSave(data []byte, persistCfg *Config, migrating bool) ([]byte, 
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-request-scoped-errors")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-settings")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "account-groups")
+	// Removed downstream keys must not survive in the file, or the next reload
+	// resurrects their credential-group restriction.
+	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "api-key-credential-groups")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "antigravity", "sensitive-words-replace")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "antigravity", "sensitive-patterns-replace")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "devin", "sensitive-words-replace")
